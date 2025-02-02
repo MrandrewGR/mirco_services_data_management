@@ -1,4 +1,4 @@
-# utils/libs/mirco_services_data_management/mirco_services_data_management/base_worker.py
+# mirco_services_data_management/base_worker.py
 
 import threading
 import time
@@ -30,11 +30,6 @@ class BaseWorker:
         self.producer = create_producer(self.config.KAFKA_BROKER)
 
     def start(self):
-        """
-        Запуск основного worker'a:
-          - поток чтения из Kafka
-          - поток опроса БД (backfill)
-        """
         logger.info("BaseWorker.start() called. Запускаем потоки.")
         t_kafka = threading.Thread(target=self.run_kafka_loop, daemon=True)
         t_kafka.start()
@@ -42,7 +37,6 @@ class BaseWorker:
         t_db = threading.Thread(target=self.poll_db_loop, daemon=True)
         t_db.start()
 
-        # Держим основной поток, чтобы приложение не завершалось
         try:
             while True:
                 time.sleep(10)
@@ -60,11 +54,6 @@ class BaseWorker:
             time.sleep(self.config.POLL_INTERVAL_DB)
 
     def check_db_for_unprocessed(self):
-        """
-        Заглушка/пример.
-        В конкретном воркере можно переопределить,
-        чтобы ходить в таблицу messages_* и вынимать необработанные данные.
-        """
         logger.debug("check_db_for_unprocessed() - нужно переопределить.")
 
     def handle_message(self, message: dict):
@@ -84,11 +73,4 @@ class BaseWorker:
         return message.get("message_id") or message.get("id")
 
     def process_message(self, message: dict):
-        """
-        Заглушка: здесь выполняется основная логика.
-        Переопределить в потомке, напр.:
-          - парсить
-          - сохранять
-          - send_message(producer, self.config.KAFKA_PRODUCE_TOPIC, {...})
-        """
         logger.info(f"BaseWorker: обрабатываем сообщение: {message}")

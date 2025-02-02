@@ -1,4 +1,4 @@
-# utils/libs/mirco_services_data_management/mirco_services_data_management/config.py
+#   mirco_services_data_management/config.py
 
 import os
 

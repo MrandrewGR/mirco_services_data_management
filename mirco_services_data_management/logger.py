@@ -1,4 +1,4 @@
-# utils/libs/mirco_services_data_management/mirco_services_data_management/logger.py
+# mirco_services_data_management//logger.py
 
 import logging
 

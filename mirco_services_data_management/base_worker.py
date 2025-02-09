@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class BaseWorker:
     """
     Универсальный базовый класс, который можно переопределять
-    в конкретном микросервисе (например, NSDWorker).
+    в конкретном микросервисе
     """
     def __init__(self, config: BaseConfig):
         self.config = config

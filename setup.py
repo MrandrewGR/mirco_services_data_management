@@ -1,5 +1,5 @@
 
-#   mirco_services_data_management/setup.py
+#   setup.py
 
 from setuptools import setup, find_packages
 

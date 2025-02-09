@@ -1,4 +1,4 @@
-# utils/libs/mirco_services_data_management/mirco_services_data_management/db.py
+# mirco_services_data_management/db.py
 
 import os
 import psycopg2

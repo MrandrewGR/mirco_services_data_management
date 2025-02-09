@@ -1,20 +1,18 @@
-
 #   setup.py
 
 from setuptools import setup, find_packages
 
 setup(
-    name="mirco_services_data_management",  # Имя для импорта — с подчёркиваниями!
-    version="0.1.0",
+    name="mirco_services_data_management",  # Keep the importable name
+    version="0.2.0",  # Bumped for the new async changes
     author="Andrei Grishin",
     author_email="",
     description=(
-        "Внутренняя библиотека для микросервисов, включает в себя "
-        "(Kafka, PostgreSQL, дубли, партиционирование)."
+        "Внутренняя библиотека для микросервисов (Kafka aio, PostgreSQL, партиционирование, дубли)."
     ),
     packages=find_packages(exclude=["tests", "tests.*"]),
     install_requires=[
-        "kafka-python>=2.0.2",
+        "aiokafka>=0.8.6",
         "psycopg2-binary>=2.9.5"
     ],
     python_requires=">=3.8",

@@ -12,6 +12,10 @@ class BaseConfig:
     KAFKA_GROUP_ID = os.getenv('KAFKA_GROUP_ID', 'my_worker_group')
     KAFKA_PRODUCE_TOPIC = os.getenv('KAFKA_PRODUCE_TOPIC', 'my_output_topic')
 
+    # Optional: Kafka transactions
+    TRANSACTIONAL = os.getenv('TRANSACTIONAL', 'False').lower() in ('true', '1', 'yes')
+    TRANSACTIONAL_ID = os.getenv('TRANSACTIONAL_ID', 'my_transaction_id')
+
     # Postgres
     DB_HOST = os.getenv('DB_HOST', 'postgres')
     DB_PORT = os.getenv('DB_PORT', '5432')

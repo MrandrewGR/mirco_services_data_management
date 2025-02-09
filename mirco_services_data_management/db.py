@@ -31,7 +31,6 @@ def get_connection(dbname_var: str = "DB_NAME"):
 def ensure_database_exists(target_db_var='DB_NAME', main_db='postgres'):
     """
     Проверяет/создаёт базу данных (target_db), если её нет.
-    Подключается к main_db (по умолчанию postgres).
     """
     target_db = os.getenv(target_db_var, 'my_database')
     user = os.getenv("DB_USER", 'postgres')
@@ -117,15 +116,6 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
     Создаёт партиционированную таблицу (PARTITION BY RANGE (month_part)).
-    Например:
-        CREATE TABLE parent_table (
-            id SERIAL,
-            data JSONB NOT NULL,
-            month_part DATE NOT NULL,
-            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id, month_part)
-        ) PARTITION BY RANGE (month_part);
-    И при необходимости создаём уникальный индекс (unique_index_fields).
     """
     conn = get_connection()
     try:
@@ -188,6 +178,7 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
     Если deduplicate=True, используется ON CONFLICT DO NOTHING (но требуется уникальный индекс).
     Возвращает True, если запись вставлена (не дубликат), False если дубликат.
     """
+    from datetime import datetime
     month_part = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     ensure_partition_exists(parent_table, month_part)
     conn = get_connection()
@@ -195,6 +186,7 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
     try:
         with conn:
             with conn.cursor() as cur:
+                import json
                 if deduplicate:
                     sql = f"""
                         INSERT INTO {parent_table} (data, month_part)

@@ -1,4 +1,15 @@
 # mirco_services_data_management/db.py
+"""
+This module handles all PostgreSQL-related operations:
+- Establishing connections
+- Creating tables for processed messages
+- Creating partitioned parent tables and partitions
+- Inserting records into partitioned tables with deduplication
+
+Modifications made:
+- In the function ensure_partitioned_parent_table(), the index name is sanitized by removing non-alphanumeric characters from each element of unique_index_fields. This prevents syntax errors when the field contains expressions (e.g. data->>'message_id').
+- Comments have been added and updated for clarity.
+"""
 
 import os
 import psycopg2
@@ -6,13 +17,16 @@ import psycopg2.extensions
 import json
 import logging
 from datetime import datetime
+import re
 
 logger = logging.getLogger(__name__)
 
+
 def get_connection(dbname_var: str = "DB_NAME"):
     """
-    Возвращает psycopg2-соединение, учитывая переменные окружения:
-      DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT.
+    Returns a psycopg2 connection using the following environment variables:
+      - DB_NAME (or the provided dbname_var)
+      - DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
     """
     dbname = os.getenv(dbname_var, 'my_database')
     user = os.getenv("DB_USER", 'postgres')
@@ -28,9 +42,10 @@ def get_connection(dbname_var: str = "DB_NAME"):
         port=port
     )
 
+
 def ensure_database_exists(target_db_var='DB_NAME', main_db='postgres'):
     """
-    Проверяет/создаёт базу данных (target_db), если её нет.
+    Checks if the target database exists and creates it if not.
     """
     target_db = os.getenv(target_db_var, 'my_database')
     user = os.getenv("DB_USER", 'postgres')
@@ -59,9 +74,10 @@ def ensure_database_exists(target_db_var='DB_NAME', main_db='postgres'):
     finally:
         conn.close()
 
+
 def ensure_processed_table(table_name="processed_messages", unique_field="message_id"):
     """
-    Создаёт таблицу, где храним записи об обработанных сообщениях (чтобы избежать дублей).
+    Creates the table to store processed messages to avoid duplicates.
     """
     conn = get_connection()
     try:
@@ -73,13 +89,14 @@ def ensure_processed_table(table_name="processed_messages", unique_field="messag
                         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
-        logger.info(f"Таблица '{table_name}' проверена/создана.")
+        logger.info(f"Table '{table_name}' checked/created.")
     finally:
         conn.close()
 
+
 def is_processed(message_id: int, table_name="processed_messages", unique_field="message_id") -> bool:
     """
-    Проверяет, есть ли запись с message_id в таблице processed_messages.
+    Checks if a given message_id already exists in the processed_messages table.
     """
     conn = get_connection()
     try:
@@ -93,9 +110,11 @@ def is_processed(message_id: int, table_name="processed_messages", unique_field=
     finally:
         conn.close()
 
+
 def mark_processed(message_id: int, table_name="processed_messages", unique_field="message_id"):
     """
-    Помечает сообщение как обработанное, вставляя запись (с ON CONFLICT DO NOTHING).
+    Marks a message as processed by inserting a record into the processed_messages table.
+    Uses ON CONFLICT DO NOTHING to avoid duplicates.
     """
     conn = get_connection()
     try:
@@ -111,10 +130,19 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
     finally:
         conn.close()
 
+
+# ------------------- Partitioning Functions -------------------
+
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
-    Creates a partitioned table (PARTITION BY RANGE (month_part)).
-    If unique_index_fields are provided, it creates a unique index on those fields.
+    Creates a partitioned table (PARTITION BY RANGE on month_part).
+
+    If unique_index_fields is provided, a unique index is created on those fields.
+    If any field is an expression (e.g., "data->>'message_id'"), the index name is sanitized
+    to remove any non-alphanumeric characters. The index is created as a functional index.
+
+    Example unique_index_fields:
+        ["(data->>'message_id')", "month_part"]
     """
     conn = get_connection()
     try:
@@ -133,10 +161,11 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
                 logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
 
                 if unique_index_fields:
-                    # For creating a unique index, we need to apply a functional index for JSON fields
-                    idx_name = f"{parent_table}_{'_'.join(unique_index_fields)}_uniq_idx"
+                    # Sanitize each field to build a safe index name (remove non-alphanumeric characters)
+                    safe_fields = [re.sub(r'\W+', '', field) for field in unique_index_fields]
+                    idx_name = f"{parent_table}_{'_'.join(safe_fields)}_uniq_idx"
+                    # Join the fields as provided (they may include functional expressions)
                     fields_str = ", ".join(unique_index_fields)
-                    # Modify the index creation to treat data->>'message_id' as a functional expression
                     cur.execute(f"""
                         CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
                         ON {parent_table} USING btree ({fields_str});
@@ -148,7 +177,8 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
 
 def ensure_partition_exists(parent_table: str, month_part: datetime):
     """
-    Создаёт (если нет) партицию вида parent_table_YYYY_MM с границами [start_of_month, start_of_next).
+    Creates a partition (if it does not exist) named parent_table_YYYY_MM with boundaries
+    [start_of_month, start_of_next_month).
     """
     conn = get_connection()
     partition_name = f"{parent_table}_{month_part.strftime('%Y_%m')}"
@@ -164,21 +194,24 @@ def ensure_partition_exists(parent_table: str, month_part: datetime):
                 cur.execute("SELECT to_regclass(%s);", (partition_name,))
                 exists = cur.fetchone()[0]
                 if not exists:
-                    logger.info(f"Создаём партицию {partition_name}...")
+                    logger.info(f"Creating partition {partition_name}...")
                     cur.execute(f"""
                         CREATE TABLE {partition_name}
                         PARTITION OF {parent_table}
                         FOR VALUES FROM (%s) TO (%s);
                     """, (start_date.date(), end_date.date()))
-                    logger.info(f"Партиция {partition_name} успешно создана.")
+                    logger.info(f"Partition {partition_name} created successfully.")
     finally:
         conn.close()
 
+
 def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=True) -> bool:
     """
-    Вставляет data_dict в JSONB‑поле, month_part = 1 число текущего месяца.
-    Если deduplicate=True, используется ON CONFLICT DO NOTHING (но требуется уникальный индекс).
-    Возвращает True, если запись вставлена (не дубликат), False если дубликат.
+    Inserts data_dict into the JSONB column of the specified partitioned table.
+    The month_part is set to the first day of the current UTC month.
+
+    If deduplicate=True, ON CONFLICT DO NOTHING is used (this requires the unique index).
+    Returns True if the record was inserted (i.e. it was not a duplicate), otherwise False.
     """
     from datetime import datetime
     month_part = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -209,7 +242,7 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
                     inserted = True
     except Exception as e:
         conn.rollback()
-        logger.error(f"Ошибка при вставке в {parent_table}: {e}")
+        logger.error(f"Error inserting into {parent_table}: {e}")
     finally:
         conn.close()
     return inserted

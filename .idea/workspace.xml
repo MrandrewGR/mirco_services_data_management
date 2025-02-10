@@ -6,6 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="a141c7e4-11e0-42a6-a8d1-3d70b371e311" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mirco_services_data_management/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/mirco_services_data_management/db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -84,7 +86,7 @@
       <option name="presentableId" value="Default" />
       <updated>1738515307209</updated>
       <workItem from="1738515308487" duration="466000" />
-      <workItem from="1738527551838" duration="12476000" />
+      <workItem from="1738527551838" duration="13141000" />
     </task>
     <servers />
   </component>

@@ -135,11 +135,10 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
 
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
-    Creates a partitioned table (PARTITION BY RANGE on month_part).
+    Creates a partitioned table (PARTITION BY RANGE (month_part)).
 
     If unique_index_fields is provided, a unique index is created on those fields.
-    If any field is an expression (e.g., "data->>'message_id'"), the index name is sanitized
-    to remove any non-alphanumeric characters. The index is created as a functional index.
+    If any field is an expression (e.g., "data->>'message_id'"), the index is treated as a functional index.
 
     Example unique_index_fields:
         ["(data->>'message_id')", "month_part"]
@@ -161,14 +160,16 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
                 logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
 
                 if unique_index_fields:
-                    # Sanitize each field to build a safe index name (remove non-alphanumeric characters)
+                    # We sanitize the index name and handle expressions (e.g., data->>'message_id')
                     safe_fields = [re.sub(r'\W+', '', field) for field in unique_index_fields]
                     idx_name = f"{parent_table}_{'_'.join(safe_fields)}_uniq_idx"
-                    # Join the fields as provided (they may include functional expressions)
+                    # Here we join unique_index_fields, ensuring functional index expression handling
                     fields_str = ", ".join(unique_index_fields)
+
+                    # Create the index properly handling expressions like data->>'message_id'
                     cur.execute(f"""
                         CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
-                        ON {parent_table} USING btree ({fields_str});
+                        ON {parent_table} ({fields_str});
                     """)
                     logger.info(f"Unique index {idx_name} checked/created.")
     finally:

@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mirco_services_data_management",  # Keep the importable name
-    version="0.2.0",  # Bumped for the new async changes
+    version="0.2.1",  # Bumped for the new async changes
     author="Andrei Grishin",
     author_email="",
     description=(

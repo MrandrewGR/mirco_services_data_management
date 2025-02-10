@@ -111,11 +111,10 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
     finally:
         conn.close()
 
-# ------------------- Пример партиционирования -------------------
-
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
-    Создаёт партиционированную таблицу (PARTITION BY RANGE (month_part)).
+    Creates a partitioned table (PARTITION BY RANGE (month_part)).
+    If unique_index_fields are provided, it creates a unique index on those fields.
     """
     conn = get_connection()
     try:
@@ -131,18 +130,21 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
                     )
                     PARTITION BY RANGE (month_part);
                 """)
-                logger.info(f"Таблица {parent_table} PARTITION BY RANGE проверена/создана.")
+                logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
 
                 if unique_index_fields:
+                    # For creating a unique index, we need to apply a functional index for JSON fields
                     idx_name = f"{parent_table}_{'_'.join(unique_index_fields)}_uniq_idx"
                     fields_str = ", ".join(unique_index_fields)
+                    # Modify the index creation to treat data->>'message_id' as a functional expression
                     cur.execute(f"""
                         CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
-                        ON {parent_table} ({fields_str});
+                        ON {parent_table} USING btree ({fields_str});
                     """)
-                    logger.info(f"Уникальный индекс {idx_name} проверен/создан.")
+                    logger.info(f"Unique index {idx_name} checked/created.")
     finally:
         conn.close()
+
 
 def ensure_partition_exists(parent_table: str, month_part: datetime):
     """

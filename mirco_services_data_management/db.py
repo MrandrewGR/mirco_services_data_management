@@ -24,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 def get_connection(dbname_var: str = "DB_NAME"):
     """
-    Returns a psycopg2 connection using the following environment variables:
+    Returns a psycopg2 connection using environment variables:
       - DB_NAME (or the provided dbname_var)
-      - DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+      - DB_USER, DB_PASSWORD, DB_HOST, DB_PORT.
     """
     dbname = os.getenv(dbname_var, 'my_database')
     user = os.getenv("DB_USER", 'postgres')
@@ -135,13 +135,16 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
 
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
-    Creates a partitioned table (PARTITION BY RANGE (month_part)).
+    Creates a partitioned table (PARTITION BY RANGE on month_part).
 
-    If unique_index_fields is provided, a unique index is created on those fields.
-    If any field is an expression (e.g., "data->>'message_id'"), the index is treated as a functional index.
+    If unique_index_fields is provided, attempts to create a unique index on those fields.
+    The expected format for unique_index_fields is a list of strings (which may be expressions)
+    such as: ["(data->>'message_id')", "month_part"].
 
-    Example unique_index_fields:
-        ["(data->>'message_id')", "month_part"]
+    If duplicate data already exists (causing a UniqueViolation), the error is caught and a warning
+    is logged, and the index creation is skipped.
+
+    NOTE: If you want the unique index to be enforced, you must clean up duplicate rows from the table.
     """
     conn = get_connection()
     try:
@@ -160,21 +163,26 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
                 logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
 
                 if unique_index_fields:
-                    # We sanitize the index name and handle expressions (e.g., data->>'message_id')
+                    # Sanitize the index name by removing non-alphanumeric characters from each field.
                     safe_fields = [re.sub(r'\W+', '', field) for field in unique_index_fields]
                     idx_name = f"{parent_table}_{'_'.join(safe_fields)}_uniq_idx"
-                    # Here we join unique_index_fields, ensuring functional index expression handling
+                    # Join the unique index fields (which may be expressions)
                     fields_str = ", ".join(unique_index_fields)
-
-                    # Create the index properly handling expressions like data->>'message_id'
-                    cur.execute(f"""
-                        CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
-                        ON {parent_table} ({fields_str});
-                    """)
-                    logger.info(f"Unique index {idx_name} checked/created.")
+                    try:
+                        cur.execute(f"""
+                            CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
+                            ON {parent_table} USING btree ({fields_str});
+                        """)
+                        logger.info(f"Unique index {idx_name} checked/created.")
+                    except psycopg2.errors.UniqueViolation as e:
+                        # Roll back the transaction so that subsequent operations can proceed.
+                        conn.rollback()
+                        logger.warning(
+                            f"Unique index creation failed on {parent_table} due to duplicate data: {e}. "
+                            "Skipping unique index creation. (Please clean duplicates if you require uniqueness.)"
+                        )
     finally:
         conn.close()
-
 
 def ensure_partition_exists(parent_table: str, month_part: datetime):
     """

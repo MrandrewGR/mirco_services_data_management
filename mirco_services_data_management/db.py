@@ -28,11 +28,14 @@ def get_connection(dbname_var: str = "DB_NAME"):
       - DB_NAME (or the provided dbname_var)
       - DB_USER, DB_PASSWORD, DB_HOST, DB_PORT.
     """
-    dbname = os.getenv(dbname_var, 'my_database')
+    dbname = os.getenv(dbname_var)  # Dynamically fetch from environment variable
     user = os.getenv("DB_USER", 'postgres')
     password = os.getenv("DB_PASSWORD", 'postgres')
     host = os.getenv("DB_HOST", 'postgres')
     port = os.getenv("DB_PORT", '5432')
+
+    if not dbname:
+        raise ValueError(f"Database name '{dbname_var}' is not set in the environment variables.")
 
     return psycopg2.connect(
         dbname=dbname,

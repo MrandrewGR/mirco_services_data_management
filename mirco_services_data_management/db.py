@@ -1,15 +1,4 @@
-# mirco_services_data_management/db.py
-"""
-This module handles all PostgreSQL-related operations:
-- Establishing connections
-- Creating tables for processed messages
-- Creating partitioned parent tables and partitions
-- Inserting records into partitioned tables with deduplication
-
-Modifications made:
-- In the function ensure_partitioned_parent_table(), the index name is sanitized by removing non-alphanumeric characters from each element of unique_index_fields. This prevents syntax errors when the field contains expressions (e.g. data->>'message_id').
-- Comments have been added and updated for clarity.
-"""
+# File: mirco_services_data_management/db.py
 
 import os
 import psycopg2
@@ -20,7 +9,6 @@ from datetime import datetime
 import re
 
 logger = logging.getLogger(__name__)
-
 
 def get_connection(dbname_var: str = "DB_NAME"):
     """
@@ -134,25 +122,16 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
         conn.close()
 
 
-# ------------------- Partitioning Functions -------------------
-
 def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
     """
-    Creates a partitioned table (PARTITION BY RANGE on month_part).
-
-    If unique_index_fields is provided, attempts to create a unique index on those fields.
-    The expected format for unique_index_fields is a list of strings (which may be expressions)
-    such as: ["(data->>'message_id')", "month_part"].
-
-    If duplicate data already exists (causing a UniqueViolation), the error is caught and a warning
-    is logged, and the index creation is skipped.
-
-    NOTE: If you want the unique index to be enforced, you must clean up duplicate rows from the table.
+    Creates a partitioned table (PARTITION BY RANGE on month_part) if not exists.
+    NOTE: The unique_index_fields argument is now ignored/removed to allow multiple edits.
     """
     conn = get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Create the parent partitioned table if needed
                 cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS {parent_table} (
                         id SERIAL,
@@ -165,27 +144,12 @@ def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
                 """)
                 logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
 
-                if unique_index_fields:
-                    # Sanitize the index name by removing non-alphanumeric characters from each field.
-                    safe_fields = [re.sub(r'\W+', '', field) for field in unique_index_fields]
-                    idx_name = f"{parent_table}_{'_'.join(safe_fields)}_uniq_idx"
-                    # Join the unique index fields (which may be expressions)
-                    fields_str = ", ".join(unique_index_fields)
-                    try:
-                        cur.execute(f"""
-                            CREATE UNIQUE INDEX IF NOT EXISTS {idx_name}
-                            ON {parent_table} USING btree ({fields_str});
-                        """)
-                        logger.info(f"Unique index {idx_name} checked/created.")
-                    except psycopg2.errors.UniqueViolation as e:
-                        # Roll back the transaction so that subsequent operations can proceed.
-                        conn.rollback()
-                        logger.warning(
-                            f"Unique index creation failed on {parent_table} due to duplicate data: {e}. "
-                            "Skipping unique index creation. (Please clean duplicates if you require uniqueness.)"
-                        )
+                # DO NOT create any unique index here
+                # We no longer enforce (data->>'message_id'), month_part uniqueness
+
     finally:
         conn.close()
+
 
 def ensure_partition_exists(parent_table: str, month_part: datetime):
     """
@@ -222,8 +186,11 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
     Inserts data_dict into the JSONB column of the specified partitioned table.
     The month_part is set to the first day of the current UTC month.
 
-    If deduplicate=True, ON CONFLICT DO NOTHING is used (this requires the unique index).
-    Returns True if the record was inserted (i.e. it was not a duplicate), otherwise False.
+    If deduplicate=True, uses ON CONFLICT DO NOTHING. This REQUIRES a matching unique index,
+    but we've removed it. So with deduplicate=True, you might simply skip it or rely
+    on some partial index if you created one manually.
+
+    Returns True if the record was inserted, otherwise False.
     """
     from datetime import datetime
     month_part = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -235,6 +202,7 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
             with conn.cursor() as cur:
                 import json
                 if deduplicate:
+                    # If no unique index is defined in DB, this ON CONFLICT won't do anything.
                     sql = f"""
                         INSERT INTO {parent_table} (data, month_part)
                         VALUES (%s, %s)
@@ -247,7 +215,6 @@ def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=Tr
                         VALUES (%s, %s)
                         RETURNING id;
                     """
-
                 cur.execute(sql, (json.dumps(data_dict), month_part.date()))
                 row = cur.fetchone()
                 if row is not None:

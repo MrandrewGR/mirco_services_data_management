@@ -122,31 +122,29 @@ def mark_processed(message_id: int, table_name="processed_messages", unique_fiel
         conn.close()
 
 
-def ensure_partitioned_parent_table(parent_table, unique_index_fields=None):
+def ensure_partitioned_parent_table(parent_table: str):
     """
-    Creates a partitioned table (PARTITION BY RANGE on month_part) if not exists.
-    NOTE: The unique_index_fields argument is now ignored/removed to allow multiple edits.
+    Creates a partitioned table (PARTITION BY RANGE on month_part) if not exists,
+    with a dedicated column for message_id that we can use for upsert.
+    The primary key is (month_part, message_id).
     """
     conn = get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
                 # Create the parent partitioned table if needed
+                # We store message_id as a BIGINT, plus a unique constraint for upsert
                 cur.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {parent_table} (
-                        id SERIAL,
-                        data JSONB NOT NULL,
-                        month_part DATE NOT NULL,
-                        processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (id, month_part)
-                    )
-                    PARTITION BY RANGE (month_part);
+                CREATE TABLE IF NOT EXISTS {parent_table} (
+                    message_id BIGINT NOT NULL,
+                    data JSONB NOT NULL,
+                    month_part DATE NOT NULL,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (month_part, message_id)
+                )
+                PARTITION BY RANGE (month_part);
                 """)
-                logger.info(f"Table {parent_table} PARTITION BY RANGE checked/created.")
-
-                # DO NOT create any unique index here
-                # We no longer enforce (data->>'message_id'), month_part uniqueness
-
+                logger.info(f"Table {parent_table} (partitioned by month_part) checked/created.")
     finally:
         conn.close()
 
@@ -172,13 +170,80 @@ def ensure_partition_exists(parent_table: str, month_part: datetime):
                 if not exists:
                     logger.info(f"Creating partition {partition_name}...")
                     cur.execute(f"""
-                        CREATE TABLE {partition_name}
-                        PARTITION OF {parent_table}
-                        FOR VALUES FROM (%s) TO (%s);
+                    CREATE TABLE {partition_name}
+                    PARTITION OF {parent_table}
+                    FOR VALUES FROM (%s) TO (%s);
                     """, (start_date.date(), end_date.date()))
                     logger.info(f"Partition {partition_name} created successfully.")
     finally:
         conn.close()
+
+def upsert_partitioned_record(parent_table: str, data_dict: dict):
+    """
+    Upserts (month_part, message_id) => data.
+    Overwrites old state so that we only keep the latest version of each message_id.
+    Returns True if newly inserted, False if updated existing row.
+    """
+    from datetime import datetime
+
+    # Ensure we have a date-based partition corresponding to the message date (or current month).
+    # Usually, you'll use the message's date (already in Moscow time) to figure out the correct month_part.
+    # If you store it in data_dict["date"], parse that back out. For demonstration, let's parse:
+    # e.g. "date": "2025-03-09T12:05:00+03:00"
+    # Or if you want the actual posted month, do so. Otherwise fallback to "UTC now" or "Moscow now".
+    import dateutil.parser
+
+    iso_dt = data_dict.get("date")  # the date in ISO format, e.g. "2025-03-09T..."
+    if iso_dt:
+        dt_moscow = dateutil.parser.isoparse(iso_dt)
+    else:
+        # fallback if missing
+        dt_moscow = datetime.now()
+
+    # we only need year+month from dt_moscow
+    month_part = dt_moscow.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    message_id = data_dict.get("message_id")
+    if not message_id:
+        logger.warning("upsert_partitioned_record called without message_id in data_dict!")
+        return False
+
+    # Ensure partition is created
+    ensure_partition_exists(parent_table, month_part)
+
+    inserted = False
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                import json
+                # We do ON CONFLICT on the primary key (month_part, message_id),
+                # and overwrite data with the new "latest" state.
+                sql = f"""
+                INSERT INTO {parent_table} (month_part, message_id, data)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (month_part, message_id)
+                DO UPDATE SET
+                    data = EXCLUDED.data,
+                    processed_at = CURRENT_TIMESTAMP
+                RETURNING xmax = 0;  -- 'xmax=0' is true if newly inserted, false if updated
+                """
+                cur.execute(
+                    sql,
+                    (month_part.date(), message_id, json.dumps(data_dict))
+                )
+                # In Postgres, "RETURNING xmax=0" can help detect insert vs update:
+                row = cur.fetchone()
+                # row[0] == True => inserted, False => updated
+                if row and row[0] is True:
+                    inserted = True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error upserting into {parent_table}: {e}")
+    finally:
+        conn.close()
+
+    return inserted
 
 
 def insert_partitioned_record(parent_table: str, data_dict: dict, deduplicate=True) -> bool:

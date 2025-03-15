@@ -1,5 +1,3 @@
-# File: mirco_services_data_management/db.py
-
 import os
 import psycopg2
 import psycopg2.extensions
@@ -103,26 +101,6 @@ def is_processed(message_id: int, table_name="processed_messages", unique_field=
         conn.close()
 
 
-def mark_processed(message_id: int, table_name="processed_messages", unique_field="message_id"):
-    """
-    Marks a message as processed by inserting a record into the processed_messages table.
-    Uses ON CONFLICT DO NOTHING to avoid duplicates.
-    """
-    conn = get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                        INSERT INTO {table_name} ({unique_field})
-                        VALUES (%s)
-                        ON CONFLICT DO NOTHING;
-                        """, (message_id,))
-    except Exception as e:
-        logger.error(f"Error marking message_id={message_id} as processed: {e}")
-    finally:
-        conn.close()
-
-
 def ensure_partitioned_parent_table(parent_table: str):
     """
     Creates a partitioned table (PARTITION BY RANGE on month_part) if not exists,
@@ -183,6 +161,8 @@ def upsert_partitioned_record(parent_table: str, data_dict: dict):
     Upserts the record by (month_part, message_id).
     Overwrites any existing row with the new data, thus storing only the latest state.
     Returns True if newly inserted, False if updated an existing row.
+    NOTE: Differentiating insertion vs update is not supported on partitioned tables,
+          so this function always returns False.
     """
     import dateutil.parser
 
@@ -191,7 +171,7 @@ def upsert_partitioned_record(parent_table: str, data_dict: dict):
         logger.warning("upsert_partitioned_record called without 'message_id' in data_dict.")
         return False
 
-    # We expect data_dict["date"] to be an ISO8601 string in *Moscow time*,
+    # We expect data_dict["date"] to be an ISO8601 string in Moscow time,
     # e.g. "2025-03-09T12:05:00+03:00".
     iso_dt = data_dict.get("date")
     if iso_dt:
@@ -210,22 +190,19 @@ def upsert_partitioned_record(parent_table: str, data_dict: dict):
     try:
         with conn:
             with conn.cursor() as cur:
-                # We do ON CONFLICT on (month_part, message_id),
-                # overwriting 'data' and setting processed_at=NOW()
-                import json
+                # Убираем RETURNING с системным столбцом, который недоступен для партиционированных таблиц
                 sql = f"""
                         INSERT INTO {parent_table} (month_part, message_id, data)
                         VALUES (%s, %s, %s)
                         ON CONFLICT (month_part, message_id)
                         DO UPDATE SET
                             data = EXCLUDED.data,
-                            processed_at = CURRENT_TIMESTAMP
-                        RETURNING xmax = 0;
+                            processed_at = CURRENT_TIMESTAMP;
                         """
                 cur.execute(sql, (month_part.date(), message_id, json.dumps(data_dict)))
-                row = cur.fetchone()
-                if row and row[0] is True:
-                    inserted = True
+                # Невозможно определить статус вставки для партиционированных таблиц,
+                # поэтому возвращаем False по умолчанию.
+                inserted = False
     except Exception as e:
         conn.rollback()
         logger.error(f"Error upserting into {parent_table}: {e}")
